@@ -16,8 +16,8 @@ datasets:
   optical_caption:
     type: generate
     stage: stage2
-    datasets_dir: "../../../../data/optical/gnn_embeddings/optical_test_translator_rows.tsv"
-    pred_dir: "../../../../data/optical/gnn_embeddings/pred_optical.txt"
+    datasets_dir: "../../../../data/optical/sage/optical_test_translator_rows.tsv"
+    pred_dir: "../../../../data/optical/sage/pred_optical.txt"
     max_text_chars: 1000
     arxiv_processor:
       train:

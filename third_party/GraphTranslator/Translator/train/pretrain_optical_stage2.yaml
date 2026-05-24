@@ -16,7 +16,7 @@ datasets:
   optical_caption:
     type: stage2
     stage: stage2
-    datasets_dir: "../../../../data/optical/gnn_embeddings/optical_train_translator_rows.tsv"
+    datasets_dir: "../../../../data/optical/sage/optical_train_translator_rows.tsv"
     max_text_chars: 1000
     arxiv_processor:
       train:
