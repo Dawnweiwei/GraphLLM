@@ -1,6 +1,7 @@
 # Generated optical QA data.
 data/optical/preview/
 data/optical/smoke/
+data/optical/full/
 data/optical/*.jsonl
 data/optical/*.json
 
