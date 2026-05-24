@@ -2,8 +2,10 @@
 data/optical/preview/
 data/optical/smoke/
 data/optical/smoke_embeddings/
+data/optical/smoke_sage/
 data/optical/full/
 data/optical/gnn_embeddings/
+data/optical/sage/
 data/optical/*.jsonl
 data/optical/*.json
 
