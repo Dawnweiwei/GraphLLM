@@ -1,0 +1,14 @@
+# Generated optical QA data.
+data/optical/preview/
+data/optical/smoke/
+data/optical/*.jsonl
+data/optical/*.json
+
+# Large local datasets and third-party assets are kept out of this repo.
+OpticalNetworkTopologyDataset/
+references/
+third_party/
+
+# Python caches.
+__pycache__/
+*.py[cod]
