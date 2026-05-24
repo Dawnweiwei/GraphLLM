@@ -5,11 +5,22 @@ data/optical/full/
 data/optical/*.jsonl
 data/optical/*.json
 
-# Large local datasets and third-party assets are kept out of this repo.
+# Large local datasets and generated assets are kept out of this repo.
 OpticalNetworkTopologyDataset/
 references/
-third_party/
+third_party/GraphTranslator/data/
+third_party/GraphTranslator/logs/
+third_party/GraphTranslator/Translator/models/bert-base-uncased/
+third_party/GraphTranslator/Translator/models/chatglm2-6b/
+third_party/GraphTranslator/Translator/models/*.zip
+third_party/GraphTranslator/Translator/model_output/
+third_party/GraphTranslator/**/*.pt
+third_party/GraphTranslator/**/*.pth
+third_party/GraphTranslator/**/*.bin
 
 # Python caches.
 __pycache__/
 *.py[cod]
+
+# OS metadata.
+.DS_Store
