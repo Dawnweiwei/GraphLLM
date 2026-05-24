@@ -344,19 +344,33 @@ def main() -> None:
 
     source_samples = load_source_samples(args.input, args.max_samples)
     all_qas: list[dict[str, Any]] = []
+    qas_by_sample: list[list[dict[str, Any]]] = []
     stats = {"samples": len(source_samples), "links": 0, "services": 0, "qas": 0}
     for idx, text in enumerate(source_samples, start=1):
         parsed = parse_sample(text)
         stats["links"] += len(parsed["topology"])
         stats["services"] += len(parsed["services"])
-        all_qas.extend(generate_qas_for_sample(idx, parsed))
+        sample_qas = generate_qas_for_sample(idx, parsed)
+        qas_by_sample.append(sample_qas)
+        all_qas.extend(sample_qas)
 
     rng = random.Random(args.seed)
-    shuffled = list(all_qas)
-    rng.shuffle(shuffled)
-    split = int(len(shuffled) * args.train_ratio)
-    train_rows = shuffled[:split]
-    test_rows = shuffled[split:]
+    sample_indices = list(range(len(qas_by_sample)))
+    rng.shuffle(sample_indices)
+    split = int(len(sample_indices) * args.train_ratio)
+    train_sample_indices = set(sample_indices[:split])
+    train_rows = [
+        qa
+        for sample_idx, sample_qas in enumerate(qas_by_sample)
+        if sample_idx in train_sample_indices
+        for qa in sample_qas
+    ]
+    test_rows = [
+        qa
+        for sample_idx, sample_qas in enumerate(qas_by_sample)
+        if sample_idx not in train_sample_indices
+        for qa in sample_qas
+    ]
 
     write_jsonl(args.output_dir / "optical_qa.jsonl", all_qas)
     write_jsonl(args.output_dir / "optical_train.jsonl", train_rows)
@@ -364,6 +378,8 @@ def main() -> None:
     stats["qas"] = len(all_qas)
     stats["train_qas"] = len(train_rows)
     stats["test_qas"] = len(test_rows)
+    stats["train_samples"] = len(train_sample_indices)
+    stats["test_samples"] = len(sample_indices) - len(train_sample_indices)
     (args.output_dir / "build_stats.json").write_text(
         json.dumps(stats, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
