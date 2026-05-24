@@ -9,11 +9,15 @@ from datasets.builders.base_dataset_builder import load_dataset_config
 from datasets.builders.arxiv_text_pair_builder import (
     ArxivCaptionBuilder,
 )
+from datasets.builders.optical_text_pair_builder import (
+    OpticalCaptionBuilder,
+)
 
 from common.registry import registry
 
 __all__ = [
     "ArxivCaptionBuilder",
+    "OpticalCaptionBuilder",
 ]
 
 

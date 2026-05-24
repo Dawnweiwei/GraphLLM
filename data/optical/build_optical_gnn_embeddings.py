@@ -246,8 +246,14 @@ def format_embedding(tensor: torch.Tensor) -> str:
 def load_qa_rows(paths: list[Path]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for path in paths:
+        split = "train" if "train" in path.stem else "test" if "test" in path.stem else "all"
         with path.open("r", encoding="utf-8") as f:
-            rows.extend(json.loads(line) for line in f if line.strip())
+            for line in f:
+                if not line.strip():
+                    continue
+                row = json.loads(line)
+                row["_split"] = split
+                rows.append(row)
     return rows
 
 
@@ -287,28 +293,40 @@ def main() -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     tsv_path = args.output_dir / "optical_translator_rows.tsv"
+    split_tsv_paths = {
+        "train": args.output_dir / "optical_train_translator_rows.tsv",
+        "test": args.output_dir / "optical_test_translator_rows.tsv",
+    }
     pt_path = args.output_dir / "optical_gnn_embeddings.pt"
     meta_path = args.output_dir / "embedding_stats.json"
 
     embeddings: dict[str, torch.Tensor] = {}
     missing_focus = 0
-    with tsv_path.open("w", encoding="utf-8", newline="") as f:
-        writer = csv.writer(f, delimiter="\t")
-        writer.writerow(["id", "embedding", "producer_text", "question", "answer", "sample_id", "task_type", "subtask"])
-        for row in qa_rows:
-            sample_id = row["sample_id"]
-            node_ids, node_repr = node_repr_by_sample[sample_id]
-            graph_repr = graph_repr_by_sample[sample_id]
-            node_id = focus_node_id(row)
-            if node_id and node_id in node_ids:
-                focus_repr = node_repr[node_ids.index(node_id)]
-                embedding = F.normalize(0.7 * focus_repr + 0.3 * graph_repr, dim=0)
-            else:
-                missing_focus += int(node_id is not None)
-                embedding = graph_repr
-            embeddings[row["id"]] = embedding.cpu()
-            writer.writerow(
-                [
+    header = ["id", "embedding", "producer_text", "question", "answer", "sample_id", "task_type", "subtask", "split"]
+    split_files = {
+        split: path.open("w", encoding="utf-8", newline="")
+        for split, path in split_tsv_paths.items()
+    }
+    try:
+        split_writers = {split: csv.writer(file, delimiter="\t") for split, file in split_files.items()}
+        for writer in split_writers.values():
+            writer.writerow(header)
+        with tsv_path.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f, delimiter="\t")
+            writer.writerow(header)
+            for row in qa_rows:
+                sample_id = row["sample_id"]
+                node_ids, node_repr = node_repr_by_sample[sample_id]
+                graph_repr = graph_repr_by_sample[sample_id]
+                node_id = focus_node_id(row)
+                if node_id and node_id in node_ids:
+                    focus_repr = node_repr[node_ids.index(node_id)]
+                    embedding = F.normalize(0.7 * focus_repr + 0.3 * graph_repr, dim=0)
+                else:
+                    missing_focus += int(node_id is not None)
+                    embedding = graph_repr
+                embeddings[row["id"]] = embedding.cpu()
+                output_row = [
                     row["id"],
                     format_embedding(embedding.cpu()),
                     row["producer_text"],
@@ -317,8 +335,15 @@ def main() -> None:
                     sample_id,
                     row["task_type"],
                     row["subtask"],
+                    row["_split"],
                 ]
-            )
+                writer.writerow(output_row)
+                split_writer = split_writers.get(row["_split"])
+                if split_writer is not None:
+                    split_writer.writerow(output_row)
+    finally:
+        for file in split_files.values():
+            file.close()
 
     torch.save(embeddings, pt_path)
     stats = {
@@ -327,6 +352,8 @@ def main() -> None:
         "embedding_dim": 768,
         "missing_focus": missing_focus,
         "tsv": str(tsv_path),
+        "train_tsv": str(split_tsv_paths["train"]),
+        "test_tsv": str(split_tsv_paths["test"]),
         "pt": str(pt_path),
     }
     meta_path.write_text(json.dumps(stats, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
