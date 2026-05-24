@@ -1,6 +1,6 @@
 model:
-  arch: translator_arxiv
-  model_type: pretrain_arxiv
+  arch: translator_optical
+  model_type: pretrain_optical
   load_finetuned: False
   num_features: 768
   pretrained: ""

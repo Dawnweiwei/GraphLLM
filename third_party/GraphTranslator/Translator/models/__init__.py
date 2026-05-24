@@ -15,12 +15,14 @@ from models.translator_models.translator import TranslatorBase
 from models.translator_models.translator_chatglm_arxiv import TranslatorCHATGLMArxiv
 from models.translator_models.translator_chatglm_optical import TranslatorCHATGLMOptical
 from models.translator_models.translator_qformer_arxiv import TranslatorQformerArxiv
+from models.translator_models.translator_qformer_optical import TranslatorQformerOptical
 
 
 __all__ = [
     "load_model",
     "BaseModel",
     "TranslatorQformerArxiv",
+    "TranslatorQformerOptical",
     "TranslatorCHATGLMOptical",
     "TranslatorBase",
 ]
