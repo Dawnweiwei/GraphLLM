@@ -106,7 +106,11 @@ class TranslatorCHATGLMOptical(TranslatorCHATGLMArxiv):
 
         response_output = []
         for i in range(multimodal_embeds.shape[0]):
-            outputs_i = outputs.tolist()[i][len(input_ids[i]) :]
+            generated_ids = outputs.tolist()[i]
+            if len(generated_ids) > len(input_ids[i]):
+                outputs_i = generated_ids[len(input_ids[i]) :]
+            else:
+                outputs_i = generated_ids
             response = self.chatglm2_tokenizer.decode(outputs_i)
             response_output.append(self.chatglm2_model.process_response(response))
         return response_output
