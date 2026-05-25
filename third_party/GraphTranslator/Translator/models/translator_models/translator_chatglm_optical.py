@@ -1,6 +1,7 @@
 """ChatGLM adapter for optical-network QA."""
 
 import torch
+from torch.nn.utils.rnn import pad_sequence
 from common.registry import registry
 from models.translator_models.translator_chatglm_arxiv import TranslatorCHATGLMArxiv
 
@@ -30,6 +31,33 @@ class TranslatorCHATGLMOptical(TranslatorCHATGLMArxiv):
             context = str(producer_text).replace("\n", " ")[:MAX_CONTEXT_CHARS]
             prompts.append(QA_INSTRUCTION.format(context=context, question=str(question)))
         return prompts
+
+    def prepare_lm_input(self, vtokens, text_input, answer=None):
+        bsz, nvtoken, _ = vtokens.size()
+        tokenizer = self.chatglm2_tokenizer
+        device = self.device
+
+        sequences = []
+        labels = []
+        for idx, text in enumerate(text_input):
+            prompt_ids = [IMAGE_TOKEN_ID] * nvtoken + tokenizer.encode(str(text), add_special_tokens=True)
+            answer_ids = []
+            if answer is not None:
+                answer_ids = tokenizer.encode(str(answer[idx]), add_special_tokens=False)
+                answer_ids = answer_ids[: max(0, self.max_txt_len - len(prompt_ids))]
+
+            input_ids = torch.as_tensor(prompt_ids + answer_ids, dtype=torch.long)
+            label = input_ids.detach().clone()
+            label[: len(prompt_ids)] = -100
+            sequences.append(input_ids)
+            labels.append(label)
+
+        input_ids = pad_sequence(sequences, batch_first=True, padding_value=tokenizer.pad_token_id).to(device)
+        labels = pad_sequence(labels, batch_first=True, padding_value=-100).to(device)
+        inputs_embeds = self.chatglm2_model.transformer.embedding.word_embeddings(input_ids)
+        inputs_embeds[:, :nvtoken] = vtokens
+        inputs_embeds = inputs_embeds.transpose(0, 1).contiguous()
+        return input_ids, labels, inputs_embeds
 
     def forward(self, samples):
         multimodal_embeds = samples[1].unsqueeze(dim=1).to(self.device)
