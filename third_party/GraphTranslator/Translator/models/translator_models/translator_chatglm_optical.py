@@ -70,7 +70,7 @@ class TranslatorCHATGLMOptical(TranslatorCHATGLMArxiv):
         self,
         samples,
         prompts=None,
-        max_length=192,
+        max_length=1024,
         **kwargs,
     ):
         device = self.Qformer.bert.device
@@ -96,10 +96,11 @@ class TranslatorCHATGLMOptical(TranslatorCHATGLMArxiv):
                 answer=None,
             )
 
+            generation_max_length = min(max_length, input_ids.shape[1] + 96)
             outputs = self.chatglm2_model.generate(
                 input_ids,
                 inputs_embeds=inputs_embeds,
-                max_length=max_length,
+                max_length=generation_max_length,
                 do_sample=False,
             )
 
