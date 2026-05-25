@@ -14,7 +14,7 @@ model:
 
 datasets:
   optical_caption:
-    type: stage2
+    type: stage2_qa_1k
     stage: stage2
     datasets_dir: "../../../../data/optical/sage/optical_train_translator_rows_1k.tsv"
     max_text_chars: 420

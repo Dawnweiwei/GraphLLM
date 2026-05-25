@@ -14,7 +14,7 @@ model:
 
 datasets:
   optical_caption:
-    type: generate
+    type: generate_qa_32
     stage: stage2
     datasets_dir: "../../../../data/optical/sage/optical_test_translator_rows_32.tsv"
     pred_dir: "../../../../data/optical/sage/pred_optical_qa_32.txt"
