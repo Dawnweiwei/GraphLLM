@@ -10,9 +10,10 @@ service <-> oms
 service <-> lambda
 
 For each QA row, the exported embedding is the representation of its focus node
-mixed with the graph-level pooled representation. To stay close to the original
-GraphTranslator pipeline, GraphSAGE is trained offline with link prediction and
-then frozen when exporting embeddings for the translator.
+mixed with the graph-level pooled representation. The encoder keeps the
+GraphSAGE-style local aggregation shape, but uses relation-specific edge
+transforms and auxiliary property heads so source/destination sites, device
+parameters, and service attributes are explicitly preserved.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ import argparse
 import csv
 import json
 import random
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -38,14 +40,26 @@ from build_optical_qa import load_source_samples, parse_sample  # noqa: E402
 
 SITE_ORDER = {site: idx + 1 for idx, site in enumerate("ABCDEFGHIJKLMNOPQRSTUVWXYZ")}
 NODE_TYPES = {"site": 0, "oms": 1, "device": 2, "service": 3, "lambda": 4}
+EDGE_TYPES = {
+    "site_src_to_oms": 0,
+    "oms_to_site_dst": 1,
+    "oms_to_site_src": 2,
+    "site_dst_to_oms": 3,
+    "oms_to_device": 4,
+    "device_to_oms": 5,
+    "service_to_lambda": 6,
+    "lambda_to_service": 7,
+    "service_to_oms": 8,
+    "oms_to_service": 9,
+}
 FEATURE_DIM = 64
 
 
 def safe_float(value: str, default: float = 0.0) -> float:
-    try:
-        return float(str(value).replace("λ", "").strip())
-    except ValueError:
+    match = re.search(r"-?\d+(?:\.\d+)?", str(value))
+    if not match:
         return default
+    return float(match.group(0))
 
 
 def one_hot(index: int, size: int) -> list[float]:
@@ -129,17 +143,26 @@ def add_node(
     node_features.append(node_feature(node_type, attrs))
 
 
-def add_edge(edges: list[tuple[int, int]], node_index: dict[str, int], src: str, dst: str) -> None:
+def add_edge(
+    edges: list[tuple[int, int]],
+    edge_types: list[int],
+    node_index: dict[str, int],
+    src: str,
+    dst: str,
+    relation: str,
+) -> None:
     if src not in node_index or dst not in node_index:
         return
     edges.append((node_index[src], node_index[dst]))
+    edge_types.append(EDGE_TYPES[relation])
 
 
-def build_graph(parsed: dict[str, Any]) -> tuple[list[str], torch.Tensor, torch.Tensor]:
+def build_graph(parsed: dict[str, Any]) -> tuple[list[str], torch.Tensor, torch.Tensor, torch.Tensor]:
     node_ids: list[str] = []
     node_features: list[list[float]] = []
     node_index: dict[str, int] = {}
     edges: list[tuple[int, int]] = []
+    edge_types: list[int] = []
 
     topology = parsed["topology"]
     device = parsed["device"]
@@ -160,10 +183,10 @@ def build_graph(parsed: dict[str, Any]) -> tuple[list[str], torch.Tensor, torch.
             "oms",
             {**link, "path_count": path_counts.get(link["oms_id"], 0)},
         )
-        add_edge(edges, node_index, f"site:{link['src']}", f"oms:{link['oms_id']}")
-        add_edge(edges, node_index, f"oms:{link['oms_id']}", f"site:{link['dst']}")
-        add_edge(edges, node_index, f"oms:{link['oms_id']}", f"site:{link['src']}")
-        add_edge(edges, node_index, f"site:{link['dst']}", f"oms:{link['oms_id']}")
+        add_edge(edges, edge_types, node_index, f"site:{link['src']}", f"oms:{link['oms_id']}", "site_src_to_oms")
+        add_edge(edges, edge_types, node_index, f"oms:{link['oms_id']}", f"site:{link['dst']}", "oms_to_site_dst")
+        add_edge(edges, edge_types, node_index, f"oms:{link['oms_id']}", f"site:{link['src']}", "oms_to_site_src")
+        add_edge(edges, edge_types, node_index, f"site:{link['dst']}", f"oms:{link['oms_id']}", "site_dst_to_oms")
 
     for (oms_id, location), params in sorted(device.items()):
         edfa_type = params.get("E.type")
@@ -185,8 +208,8 @@ def build_graph(parsed: dict[str, Any]) -> tuple[list[str], torch.Tensor, torch.
                 "tilt": params.get("E.tilt", 0),
             },
         )
-        add_edge(edges, node_index, f"oms:{oms_id}", node_id)
-        add_edge(edges, node_index, node_id, f"oms:{oms_id}")
+        add_edge(edges, edge_types, node_index, f"oms:{oms_id}", node_id, "oms_to_device")
+        add_edge(edges, edge_types, node_index, node_id, f"oms:{oms_id}", "device_to_oms")
 
     for service in services:
         service_id = service["service_id"]
@@ -196,11 +219,11 @@ def build_graph(parsed: dict[str, Any]) -> tuple[list[str], torch.Tensor, torch.
         if lambda_id:
             lambda_node_id = f"lambda:{lambda_id}"
             add_node(node_ids, node_features, node_index, lambda_node_id, "lambda", {"lambda_id": lambda_id})
-            add_edge(edges, node_index, node_id, lambda_node_id)
-            add_edge(edges, node_index, lambda_node_id, node_id)
+            add_edge(edges, edge_types, node_index, node_id, lambda_node_id, "service_to_lambda")
+            add_edge(edges, edge_types, node_index, lambda_node_id, node_id, "lambda_to_service")
         for oms_id in service["path_oms_ids"]:
-            add_edge(edges, node_index, node_id, f"oms:{oms_id}")
-            add_edge(edges, node_index, f"oms:{oms_id}", node_id)
+            add_edge(edges, edge_types, node_index, node_id, f"oms:{oms_id}", "service_to_oms")
+            add_edge(edges, edge_types, node_index, f"oms:{oms_id}", node_id, "oms_to_service")
 
     if not node_ids:
         add_node(node_ids, node_features, node_index, "site:EMPTY", "site", {"site": ""})
@@ -208,9 +231,11 @@ def build_graph(parsed: dict[str, Any]) -> tuple[list[str], torch.Tensor, torch.
     x = torch.tensor(node_features, dtype=torch.float32)
     if edges:
         edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
+        edge_type = torch.tensor(edge_types, dtype=torch.long)
     else:
         edge_index = torch.empty((2, 0), dtype=torch.long)
-    return node_ids, x, edge_index
+        edge_type = torch.empty((0,), dtype=torch.long)
+    return node_ids, x, edge_index, edge_type
 
 
 class GraphSAGEEncoder(nn.Module):
@@ -218,34 +243,123 @@ class GraphSAGEEncoder(nn.Module):
         super().__init__()
         self.input = nn.Linear(in_dim, hidden_dim)
         self.self_layers = nn.ModuleList(nn.Linear(hidden_dim, hidden_dim) for _ in range(layers))
-        self.neigh_layers = nn.ModuleList(nn.Linear(hidden_dim, hidden_dim) for _ in range(layers))
+        self.neigh_layers = nn.ModuleList(
+            nn.ModuleList(nn.Linear(hidden_dim, hidden_dim) for _ in EDGE_TYPES)
+            for _ in range(layers)
+        )
         self.output = nn.Linear(hidden_dim, out_dim)
         self.type_head = nn.Linear(hidden_dim, len(NODE_TYPES))
+        self.oms_src_head = nn.Linear(hidden_dim, 27)
+        self.oms_dst_head = nn.Linear(hidden_dim, 27)
+        self.device_type_head = nn.Linear(hidden_dim, 4)
+        self.device_gain_head = nn.Linear(hidden_dim, 1)
+        self.service_lambda_head = nn.Linear(hidden_dim, 65)
+        self.service_q_margin_head = nn.Linear(hidden_dim, 1)
 
-    def encode_hidden(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
+    def encode_hidden(self, x: torch.Tensor, edge_index: torch.Tensor, edge_type: torch.Tensor) -> torch.Tensor:
         h = F.relu(self.input(x))
-        for self_layer, neigh_layer in zip(self.self_layers, self.neigh_layers):
+        for self_layer, relation_layers in zip(self.self_layers, self.neigh_layers):
             neigh = torch.zeros_like(h)
             if edge_index.numel() > 0:
                 src, dst = edge_index
-                neigh.index_add_(0, dst, h[src])
+                for rel_id, rel_layer in enumerate(relation_layers):
+                    mask = edge_type == rel_id
+                    if not bool(mask.any()):
+                        continue
+                    rel_src = src[mask]
+                    rel_dst = dst[mask]
+                    neigh.index_add_(0, rel_dst, rel_layer(h[rel_src]))
                 degree = torch.zeros(h.size(0), device=h.device)
                 degree.index_add_(0, dst, torch.ones_like(dst, dtype=h.dtype))
                 neigh = neigh / degree.clamp_min(1.0).unsqueeze(-1)
-            h = F.relu(self_layer(h) + neigh_layer(neigh))
+            h = F.relu(self_layer(h) + neigh)
         return h
 
-    def encode(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
-        return F.normalize(self.output(self.encode_hidden(x, edge_index)), dim=-1)
+    def encode(self, x: torch.Tensor, edge_index: torch.Tensor, edge_type: torch.Tensor) -> torch.Tensor:
+        return F.normalize(self.output(self.encode_hidden(x, edge_index, edge_type)), dim=-1)
 
-    def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        hidden = self.encode_hidden(x, edge_index)
-        return F.normalize(self.output(hidden), dim=-1), self.type_head(hidden)
+    def forward(self, x: torch.Tensor, edge_index: torch.Tensor, edge_type: torch.Tensor) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        hidden = self.encode_hidden(x, edge_index, edge_type)
+        outputs = {
+            "type": self.type_head(hidden),
+            "oms_src": self.oms_src_head(hidden),
+            "oms_dst": self.oms_dst_head(hidden),
+            "device_type": self.device_type_head(hidden),
+            "device_gain": self.device_gain_head(hidden).squeeze(-1),
+            "service_lambda": self.service_lambda_head(hidden),
+            "service_q_margin": self.service_q_margin_head(hidden).squeeze(-1),
+        }
+        return F.normalize(self.output(hidden), dim=-1), outputs
 
 
 def node_type_labels(node_ids: list[str], device: torch.device) -> torch.Tensor:
     labels = [NODE_TYPES[node_id.split(":", 1)[0]] for node_id in node_ids]
     return torch.tensor(labels, dtype=torch.long, device=device)
+
+
+def node_type_mask(node_ids: list[str], node_type: str, device: torch.device) -> torch.Tensor:
+    return torch.tensor([node_id.startswith(f"{node_type}:") for node_id in node_ids], dtype=torch.bool, device=device)
+
+
+def site_label(values: torch.Tensor) -> torch.Tensor:
+    return torch.round(values * 26.0).long().clamp(0, 26)
+
+
+def lambda_label(values: torch.Tensor) -> torch.Tensor:
+    return torch.round(values * 64.0).long().clamp(0, 64)
+
+
+def device_type_label(x: torch.Tensor) -> torch.Tensor:
+    label = torch.zeros(x.size(0), dtype=torch.long, device=x.device)
+    label = torch.where(x[:, 7] > 0.5, torch.ones_like(label), label)
+    label = torch.where(x[:, 8] > 0.5, torch.full_like(label, 2), label)
+    other_edfa = (x[:, 7] <= 0.5) & (x[:, 8] <= 0.5) & (x[:, 9] > 0)
+    label = torch.where(other_edfa, torch.full_like(label, 3), label)
+    return label
+
+
+def property_supervision_loss(
+    outputs: dict[str, torch.Tensor],
+    node_ids: list[str],
+    x: torch.Tensor,
+    device: torch.device,
+) -> tuple[torch.Tensor, dict[str, float]]:
+    losses: list[torch.Tensor] = []
+    stats: dict[str, float] = {}
+
+    oms_mask = node_type_mask(node_ids, "oms", device)
+    if bool(oms_mask.any()):
+        src_targets = site_label(x[oms_mask, 6])
+        dst_targets = site_label(x[oms_mask, 7])
+        src_loss = F.cross_entropy(outputs["oms_src"][oms_mask], src_targets)
+        dst_loss = F.cross_entropy(outputs["oms_dst"][oms_mask], dst_targets)
+        losses.extend([src_loss, dst_loss])
+        stats["oms_src_accuracy"] = float((outputs["oms_src"][oms_mask].argmax(dim=-1) == src_targets).float().mean().detach().cpu())
+        stats["oms_dst_accuracy"] = float((outputs["oms_dst"][oms_mask].argmax(dim=-1) == dst_targets).float().mean().detach().cpu())
+
+    device_mask = node_type_mask(node_ids, "device", device)
+    if bool(device_mask.any()):
+        type_targets = device_type_label(x)[device_mask]
+        gain_targets = x[device_mask, 9]
+        type_loss = F.cross_entropy(outputs["device_type"][device_mask], type_targets)
+        gain_loss = F.smooth_l1_loss(outputs["device_gain"][device_mask], gain_targets)
+        losses.extend([type_loss, gain_loss])
+        stats["device_type_accuracy"] = float((outputs["device_type"][device_mask].argmax(dim=-1) == type_targets).float().mean().detach().cpu())
+        stats["device_gain_mae"] = float((outputs["device_gain"][device_mask] - gain_targets).abs().mean().detach().cpu() * 30.0)
+
+    service_mask = node_type_mask(node_ids, "service", device)
+    if bool(service_mask.any()):
+        lambda_targets = lambda_label(x[service_mask, 6])
+        q_targets = x[service_mask, 8]
+        lambda_loss = F.cross_entropy(outputs["service_lambda"][service_mask], lambda_targets)
+        q_loss = F.smooth_l1_loss(outputs["service_q_margin"][service_mask], q_targets)
+        losses.extend([lambda_loss, q_loss])
+        stats["service_lambda_accuracy"] = float((outputs["service_lambda"][service_mask].argmax(dim=-1) == lambda_targets).float().mean().detach().cpu())
+        stats["service_q_margin_mae"] = float((outputs["service_q_margin"][service_mask] - q_targets).abs().mean().detach().cpu() * 20.0)
+
+    if not losses:
+        return x.sum() * 0.0, stats
+    return sum(losses) / len(losses), stats
 
 
 def sample_negative_edges(
@@ -277,7 +391,7 @@ def sample_negative_edges(
 
 def train_graphsage(
     encoder: GraphSAGEEncoder,
-    graphs: dict[str, tuple[list[str], torch.Tensor, torch.Tensor]],
+    graphs: dict[str, tuple[list[str], torch.Tensor, torch.Tensor, torch.Tensor]],
     train_sample_ids: set[str],
     *,
     epochs: int,
@@ -301,19 +415,24 @@ def train_graphsage(
         total_loss = 0.0
         total_link_loss = 0.0
         total_type_loss = 0.0
+        total_property_loss = 0.0
         total_link_correct = 0
         total_link_count = 0
         total_type_correct = 0
         total_type_count = 0
+        property_stats_sum: dict[str, float] = {}
+        property_stats_count: dict[str, int] = {}
 
         for sample_id in train_ids:
-            node_ids, x_cpu, edge_cpu = graphs[sample_id]
+            node_ids, x_cpu, edge_cpu, edge_type_cpu = graphs[sample_id]
             x = x_cpu.to(device)
             edge_index = edge_cpu.to(device)
+            edge_type = edge_type_cpu.to(device)
             labels = node_type_labels(node_ids, device)
 
             optimizer.zero_grad(set_to_none=True)
-            embeddings, type_logits = encoder(x, edge_index)
+            embeddings, outputs = encoder(x, edge_index, edge_type)
+            type_logits = outputs["type"]
 
             if edge_index.numel() > 0:
                 pos_edges = edge_index
@@ -334,15 +453,20 @@ def train_graphsage(
                 link_loss = embeddings.sum() * 0.0
 
             type_loss = F.cross_entropy(type_logits, labels)
-            loss = link_loss + 0.2 * type_loss
+            property_loss, property_stats = property_supervision_loss(outputs, node_ids, x, device)
+            loss = link_loss + 0.2 * type_loss + 0.5 * property_loss
             loss.backward()
             optimizer.step()
 
             total_loss += float(loss.detach().cpu())
             total_link_loss += float(link_loss.detach().cpu())
             total_type_loss += float(type_loss.detach().cpu())
+            total_property_loss += float(property_loss.detach().cpu())
             total_type_correct += int((type_logits.argmax(dim=-1) == labels).sum().item())
             total_type_count += int(labels.numel())
+            for key, value in property_stats.items():
+                property_stats_sum[key] = property_stats_sum.get(key, 0.0) + value
+                property_stats_count[key] = property_stats_count.get(key, 0) + 1
 
         denom = max(len(train_ids), 1)
         final_stats = {
@@ -350,9 +474,12 @@ def train_graphsage(
             "loss": total_loss / denom,
             "link_loss": total_link_loss / denom,
             "type_loss": total_type_loss / denom,
+            "property_loss": total_property_loss / denom,
             "link_accuracy": total_link_correct / max(total_link_count, 1),
             "type_accuracy": total_type_correct / max(total_type_count, 1),
         }
+        for key, value in property_stats_sum.items():
+            final_stats[key] = value / max(property_stats_count[key], 1)
         print(json.dumps({"graphsage_train": final_stats}, ensure_ascii=False))
 
     encoder.eval()
@@ -454,6 +581,7 @@ def main() -> None:
             {
                 "model_state_dict": encoder.state_dict(),
                 "node_types": NODE_TYPES,
+                "edge_types": EDGE_TYPES,
                 "feature_dim": FEATURE_DIM,
                 "train_stats": train_stats,
             },
@@ -470,8 +598,8 @@ def main() -> None:
     node_repr_by_sample: dict[str, tuple[list[str], torch.Tensor]] = {}
     graph_repr_by_sample: dict[str, torch.Tensor] = {}
     with torch.no_grad():
-        for sample_id, (node_ids, x_cpu, edge_cpu) in graphs.items():
-            node_repr = encoder.encode(x_cpu.to(device), edge_cpu.to(device)).cpu()
+        for sample_id, (node_ids, x_cpu, edge_cpu, edge_type_cpu) in graphs.items():
+            node_repr = encoder.encode(x_cpu.to(device), edge_cpu.to(device), edge_type_cpu.to(device)).cpu()
             graph_repr = F.normalize(node_repr.mean(dim=0), dim=0)
             node_repr_by_sample[sample_id] = (node_ids, node_repr)
             graph_repr_by_sample[sample_id] = graph_repr

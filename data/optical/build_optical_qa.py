@@ -198,6 +198,60 @@ def make_producer_text(sample_id: str, parsed: dict[str, Any]) -> str:
     )
 
 
+def make_topology_producer_text(sample_id: str, parsed: dict[str, Any], link: dict[str, str]) -> str:
+    overview = make_producer_text(sample_id, parsed)
+    return (
+        f"{overview} 当前问题关注{link['oms_display']}。"
+        f"拓扑表证据：{link['oms_display']}位于源节点{link['src']}到目的节点{link['dst']}的有向链路上。"
+    )
+
+
+def make_device_producer_text(
+    sample_id: str,
+    parsed: dict[str, Any],
+    oms_id: str,
+    location: str,
+    params: dict[str, str],
+) -> str:
+    overview = make_producer_text(sample_id, parsed)
+    oms_display = display_oms_id(oms_id)
+    facts = []
+    for key in ["E.type", "E.gain_dB", "E.tilt", "V.pre_voa_dB", "fiber.length_km"]:
+        if key in params:
+            facts.append(f"{key}={params[key]}")
+    evidence = "，".join(facts) if facts else "无可用参数"
+    return (
+        f"{overview} 当前问题关注{oms_display}在{location}的设备参数。"
+        f"设备参数表证据：{oms_display}，位置{location}，{evidence}。"
+    )
+
+
+def make_service_producer_text(sample_id: str, parsed: dict[str, Any], service: dict[str, str]) -> str:
+    overview = make_producer_text(sample_id, parsed)
+    return (
+        f"{overview} 当前问题关注业务{service['service_id']}。"
+        f"业务表证据：业务{service['service_id']}使用波长{service['lambda_id']}，"
+        f"路径OMS为{service['path_raw']}，Transponder为{service['transponder']}，"
+        f"Q_margin为{service['q_margin']} dB。"
+    )
+
+
+def make_network_producer_text(sample_id: str, parsed: dict[str, Any]) -> str:
+    links = parsed["topology"]
+    services = parsed["services"]
+    link_text = "，".join(f"{link['src']}到{link['dst']}（{link['oms_display']}）" for link in links)
+    service_text = "；".join(
+        f"业务{service['service_id']}：波长{service['lambda_id']}，路径OMS={service['path_raw']}，Q_margin={service['q_margin']} dB"
+        for service in services[:12]
+    )
+    if len(services) > 12:
+        service_text += f"；其余{len(services) - 12}条业务略"
+    return (
+        f"样本{sample_id}的拓扑表证据：{link_text}。"
+        f"业务表证据：{service_text}。"
+    )
+
+
 def add_common_fields(
     qa: dict[str, Any],
     sample_id: str,
@@ -214,7 +268,6 @@ def add_common_fields(
 
 def generate_qas_for_sample(sample_index: int, parsed: dict[str, Any]) -> list[dict[str, Any]]:
     sample_id = f"sample_{sample_index:04d}"
-    producer_text = make_producer_text(sample_id, parsed)
     links = parsed["topology"]
     device = parsed["device"]
     services = parsed["services"]
@@ -229,6 +282,7 @@ def generate_qas_for_sample(sample_index: int, parsed: dict[str, Any]) -> list[d
 
     for link in links:
         oms_display = link["oms_display"]
+        topology_producer_text = make_topology_producer_text(sample_id, parsed, link)
         qa = {
             "id": next_id(oms_display),
             "task_type": "topology_qa",
@@ -239,7 +293,7 @@ def generate_qas_for_sample(sample_index: int, parsed: dict[str, Any]) -> list[d
             "evidence_span": ["topology_table"],
             "difficulty": "easy",
         }
-        qas.append(add_common_fields(qa, sample_id, "oms", link["oms_id"], producer_text))
+        qas.append(add_common_fields(qa, sample_id, "oms", link["oms_id"], topology_producer_text))
 
         qa = {
             "id": next_id(oms_display),
@@ -251,7 +305,7 @@ def generate_qas_for_sample(sample_index: int, parsed: dict[str, Any]) -> list[d
             "evidence_span": ["topology_table"],
             "difficulty": "easy",
         }
-        qas.append(add_common_fields(qa, sample_id, "oms", link["oms_id"], producer_text))
+        qas.append(add_common_fields(qa, sample_id, "oms", link["oms_id"], topology_producer_text))
 
     for (oms_id, location), params in sorted(device.items()):
         edfa_type = params.get("E.type")
@@ -259,6 +313,7 @@ def generate_qas_for_sample(sample_index: int, parsed: dict[str, Any]) -> list[d
         if not edfa_type or not edfa_gain:
             continue
         oms_display = display_oms_id(oms_id)
+        device_producer_text = make_device_producer_text(sample_id, parsed, oms_id, location, params)
         qa = {
             "id": next_id(oms_display),
             "task_type": "device_qa",
@@ -269,9 +324,10 @@ def generate_qas_for_sample(sample_index: int, parsed: dict[str, Any]) -> list[d
             "evidence_span": ["device_parameter_table"],
             "difficulty": "easy",
         }
-        qas.append(add_common_fields(qa, sample_id, "device", f"{oms_id}:{location}:E", producer_text))
+        qas.append(add_common_fields(qa, sample_id, "device", f"{oms_id}:{location}:E", device_producer_text))
 
     for service in services:
+        service_producer_text = make_service_producer_text(sample_id, parsed, service)
         qa = {
             "id": next_id(f"S{service['service_id']}"),
             "task_type": "service_qa",
@@ -285,9 +341,10 @@ def generate_qas_for_sample(sample_index: int, parsed: dict[str, Any]) -> list[d
             "evidence_span": ["service_table"],
             "difficulty": "easy",
         }
-        qas.append(add_common_fields(qa, sample_id, "service", service["service_id"], producer_text))
+        qas.append(add_common_fields(qa, sample_id, "service", service["service_id"], service_producer_text))
 
     if links:
+        network_producer_text = make_network_producer_text(sample_id, parsed)
         link_text = "，".join(f"{link['src']}到{link['dst']}（{link['oms_display']}）" for link in links)
         qa = {
             "id": next_id("NET"),
@@ -299,9 +356,10 @@ def generate_qas_for_sample(sample_index: int, parsed: dict[str, Any]) -> list[d
             "evidence_span": ["topology_table"],
             "difficulty": "medium",
         }
-        qas.append(add_common_fields(qa, sample_id, "network", sample_id, producer_text))
+        qas.append(add_common_fields(qa, sample_id, "network", sample_id, network_producer_text))
 
     if services:
+        network_producer_text = make_network_producer_text(sample_id, parsed)
         first_path = services[0]["path_oms_ids"]
         common = set(first_path)
         for service in services[1:]:
@@ -321,7 +379,7 @@ def generate_qas_for_sample(sample_index: int, parsed: dict[str, Any]) -> list[d
             "evidence_span": ["service_table"],
             "difficulty": "easy",
         }
-        qas.append(add_common_fields(qa, sample_id, "network", sample_id, producer_text))
+        qas.append(add_common_fields(qa, sample_id, "network", sample_id, network_producer_text))
 
     return qas
 

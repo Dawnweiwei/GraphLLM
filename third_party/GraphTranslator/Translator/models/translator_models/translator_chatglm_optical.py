@@ -5,19 +5,38 @@ from common.registry import registry
 from models.translator_models.translator_chatglm_arxiv import TranslatorCHATGLMArxiv
 
 IMAGE_TOKEN_ID = 101
+MAX_CONTEXT_CHARS = 420
+QA_INSTRUCTION = (
+    "你是光网络拓扑问答助手。请依据图表示和给定事实回答问题，"
+    "只输出答案，不要编造无关内容。\n"
+    "事实：{context}\n"
+    "问题：{question}\n"
+    "答案："
+)
 
 
 @registry.register_model("translator_optical_chatglm")
 class TranslatorCHATGLMOptical(TranslatorCHATGLMArxiv):
     PRETRAINED_MODEL_CONFIG_DICT = {
         "pretrain_optical": "train/pretrain_optical_stage2.yaml",
+        "pretrain_optical_qa_1k": "train/pretrain_optical_stage2_qa_1k.yaml",
         "generate_optical": "train/generate_optical.yaml",
+        "generate_optical_qa_32": "train/generate_optical_qa_32.yaml",
     }
+
+    def _build_qa_prompts(self, producer_texts, questions):
+        prompts = []
+        for producer_text, question in zip(producer_texts, questions):
+            context = str(producer_text).replace("\n", " ")[:MAX_CONTEXT_CHARS]
+            prompts.append(QA_INSTRUCTION.format(context=context, question=str(question)))
+        return prompts
 
     def forward(self, samples):
         multimodal_embeds = samples[1].unsqueeze(dim=1).to(self.device)
-        answers = samples[2]
+        producer_texts = samples[2]
         questions = samples[3]
+        answers = samples[4]
+        instructions = self._build_qa_prompts(producer_texts, questions)
         device = self.Qformer.bert.device
 
         multimodal_atts = torch.ones(multimodal_embeds.size()[:-1], dtype=torch.long).to(device)
@@ -33,7 +52,7 @@ class TranslatorCHATGLMOptical(TranslatorCHATGLMArxiv):
 
         input_ids, labels, inputs_embeds = self.prepare_lm_input(
             vtokens=vtokens,
-            text_input=list(questions),
+            text_input=instructions,
             answer=list(answers),
         )
 
@@ -51,12 +70,14 @@ class TranslatorCHATGLMOptical(TranslatorCHATGLMArxiv):
         self,
         samples,
         prompts=None,
-        max_length=256,
+        max_length=192,
         **kwargs,
     ):
         device = self.Qformer.bert.device
         multimodal_embeds = samples[1].unsqueeze(dim=1).to(device)
-        questions = list(samples[3])
+        producer_texts = samples[2]
+        questions = samples[3]
+        instructions = self._build_qa_prompts(producer_texts, questions)
 
         with self.maybe_autocast():
             multimodal_atts = torch.ones(multimodal_embeds.size()[:-1], dtype=torch.long).to(device)
@@ -71,7 +92,7 @@ class TranslatorCHATGLMOptical(TranslatorCHATGLMArxiv):
 
             input_ids, _, inputs_embeds = self.prepare_lm_input(
                 vtokens=vtokens,
-                text_input=questions,
+                text_input=instructions,
                 answer=None,
             )
 
@@ -79,6 +100,7 @@ class TranslatorCHATGLMOptical(TranslatorCHATGLMArxiv):
                 input_ids,
                 inputs_embeds=inputs_embeds,
                 max_length=max_length,
+                do_sample=False,
             )
 
         response_output = []

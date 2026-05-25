@@ -65,16 +65,25 @@ class ArxivGenerateTask(BaseTask):
         if not hasattr(data_loader, "__next__"):
             data_loader = iter(data_loader)
 
-        pred_txt = open(self.cfg.datasets_cfg['arxiv_caption']['pred_dir'], 'w')
+        dataset_cfg = next(iter(self.cfg.datasets_cfg.values()))
+        pred_txt = open(dataset_cfg['pred_dir'], 'w')
 
         for network_input in metric_logger.log_every(data_loader, log_freq, iters_per_epoch, header):
             with torch.cuda.amp.autocast(enabled=use_amp):
                 ChatGLM_response = model.generate(network_input, self.cfg.prompt_cfg['generate_prompt'])
 
             for i in range(len(ChatGLM_response)):
-                id = str(network_input[0][i].detach().cpu().numpy())
-                ori_desc = network_input[2][i].replace('\n', '\\n').replace('\t', '\\t')
+                sample_id = network_input[0][i]
+                if hasattr(sample_id, "detach"):
+                    sample_id = sample_id.detach().cpu().numpy()
+                id = str(sample_id)
+                if len(network_input) >= 5:
+                    ori_desc = network_input[3][i].replace('\n', '\\n').replace('\t', '\\t')
+                    gold = network_input[4][i].replace('\n', '\\n').replace('\t', '\\t')
+                else:
+                    ori_desc = network_input[2][i].replace('\n', '\\n').replace('\t', '\\t')
+                    gold = ""
                 pred = ChatGLM_response[i].replace('\n', '\\n').replace('\t', '\\t')
-                pred_txt.write(id+'\t'+ori_desc+'\t'+pred+'\n')
+                pred_txt.write(id+'\t'+ori_desc+'\t'+gold+'\t'+pred+'\n')
 
         pred_txt.close()

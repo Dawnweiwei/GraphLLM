@@ -26,7 +26,8 @@ class OpticalTextPairDataset(BatchIterableDataset):
             text_input = producer_text[: self.max_text_chars]
             return sample_id, embedding, text_input, question
 
-        return sample_id, embedding, answer, question
+        producer_text = producer_text[: self.max_text_chars]
+        return sample_id, embedding, producer_text, question, answer
 
     def __len__(self):
         return self.row_count
