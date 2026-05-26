@@ -7,12 +7,18 @@ from models.translator_models.translator_chatglm_arxiv import TranslatorCHATGLMA
 
 IMAGE_TOKEN_ID = 101
 MAX_CONTEXT_CHARS = 420
-QA_INSTRUCTION = (
-    "你是光网络拓扑问答助手。请依据图表示和给定事实回答问题，"
-    "只输出答案，不要编造无关内容。\n"
-    "事实：{context}\n"
-    "问题：{question}\n"
-    "答案："
+GRAPH_QA_INSTRUCTION = (
+    "Answer the optical-network question using the graph tokens. "
+    "Output only the final answer.\n"
+    "Question: {question}\n"
+    "Answer:"
+)
+ORACLE_QA_INSTRUCTION = (
+    "Answer the optical-network question using the graph tokens and facts. "
+    "Output only the final answer.\n"
+    "Facts: {context}\n"
+    "Question: {question}\n"
+    "Answer:"
 )
 
 
@@ -29,9 +35,13 @@ class TranslatorCHATGLMOptical(TranslatorCHATGLMArxiv):
 
     def _build_qa_prompts(self, producer_texts, questions):
         prompts = []
+        use_context = bool(self.config.get("use_producer_context", False))
         for producer_text, question in zip(producer_texts, questions):
-            context = str(producer_text).replace("\n", " ")[:MAX_CONTEXT_CHARS]
-            prompts.append(QA_INSTRUCTION.format(context=context, question=str(question)))
+            if use_context:
+                context = str(producer_text).replace("\n", " ")[:MAX_CONTEXT_CHARS]
+                prompts.append(ORACLE_QA_INSTRUCTION.format(context=context, question=str(question)))
+            else:
+                prompts.append(GRAPH_QA_INSTRUCTION.format(question=str(question)))
         return prompts
 
     def prepare_lm_input(self, vtokens, text_input, answer=None):
