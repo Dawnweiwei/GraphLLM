@@ -21,8 +21,10 @@ class TranslatorCHATGLMOptical(TranslatorCHATGLMArxiv):
     PRETRAINED_MODEL_CONFIG_DICT = {
         "pretrain_optical": "train/pretrain_optical_stage2.yaml",
         "pretrain_optical_qa_1k": "train/pretrain_optical_stage2_qa_1k.yaml",
+        "pretrain_optical_qa_20k": "train/pretrain_optical_stage2_qa_20k.yaml",
         "generate_optical": "train/generate_optical.yaml",
         "generate_optical_qa_32": "train/generate_optical_qa_32.yaml",
+        "generate_optical_qa_1k": "train/generate_optical_qa_1k.yaml",
     }
 
     def _build_qa_prompts(self, producer_texts, questions):

@@ -16,8 +16,10 @@ class OpticalCaptionBuilder(BaseDatasetBuilder):
         "stage1": "train/pretrain_optical_stage1.yaml",
         "stage2": "train/pretrain_optical_stage2.yaml",
         "stage2_qa_1k": "train/pretrain_optical_stage2_qa_1k.yaml",
+        "stage2_qa_20k": "train/pretrain_optical_stage2_qa_20k.yaml",
         "generate": "train/generate_optical.yaml",
         "generate_qa_32": "train/generate_optical_qa_32.yaml",
+        "generate_qa_1k": "train/generate_optical_qa_1k.yaml",
     }
 
     def __init__(self, dataset_config, cfg):
