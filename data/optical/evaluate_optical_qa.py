@@ -20,6 +20,8 @@ from typing import Any
 
 SITE_RE = re.compile(r"(?<![A-Z0-9])([A-F])(?![A-Z0-9])", re.IGNORECASE)
 OMS_RE = re.compile(r"(?:OMS|O)\s*([0-9]+)", re.IGNORECASE)
+OMS_DASH_RE = re.compile(r"(?:OMS|O)\s*[-_]\s*([0-9]+)", re.IGNORECASE)
+PATH_OMS_RE = re.compile(r"路径\s*OMS\s*(?:为|=|:|：)?\s*([0-9OOMSoms\-\s,，、]+)", re.IGNORECASE)
 LAMBDA_RE = re.compile(r"(?:lambda|λ|位)\s*([0-9]+)", re.IGNORECASE)
 FLOAT_RE = re.compile(r"[-+]?\d+(?:\.\d+)?")
 EDFA_RE = re.compile(r"(?<![A-Z0-9])([0-9]{2}S)(?![A-Z0-9])", re.IGNORECASE)
@@ -72,7 +74,17 @@ def extract_sites(text: str) -> list[str]:
 
 
 def extract_oms_nums(text: str) -> list[str]:
-    return [str(int(m.group(1))) for m in OMS_RE.finditer(text or "")]
+    nums = [str(int(m.group(1))) for m in OMS_RE.finditer(text or "")]
+    nums.extend(str(int(m.group(1))) for m in OMS_DASH_RE.finditer(text or ""))
+    return nums
+
+
+def extract_path_oms_nums(text: str) -> list[str]:
+    text = text or ""
+    match = PATH_OMS_RE.search(text)
+    if match:
+        return [str(int(num)) for num in re.findall(r"\d+", match.group(1))]
+    return extract_oms_nums(text)
 
 
 def extract_lambda_nums(text: str) -> list[str]:
@@ -145,8 +157,8 @@ def service_metrics(gold: str, pred: str) -> dict[str, float]:
     pred_lambdas = set(extract_lambda_nums(pred))
     lambda_ok = bool(gold_lambdas) and gold_lambdas[0] in pred_lambdas
 
-    gold_oms = set(extract_oms_nums(gold))
-    pred_oms = set(extract_oms_nums(pred))
+    gold_oms = set(extract_path_oms_nums(gold))
+    pred_oms = set(extract_path_oms_nums(pred))
     oms_intersection = gold_oms & pred_oms
     path_precision = len(oms_intersection) / len(pred_oms) if pred_oms else 0.0
     path_recall = len(oms_intersection) / len(gold_oms) if gold_oms else 0.0
@@ -201,8 +213,15 @@ def edge_set_metrics(gold: str, pred: str) -> dict[str, float]:
 
 
 def path_membership_metrics(gold: str, pred: str) -> dict[str, float]:
-    gold_positive = bool(extract_oms_nums(gold))
-    pred_positive = bool(extract_oms_nums(pred)) or any(token in pred for token in ["是", "YES", "共同", "都经过"])
+    gold_norm = normalize_text(gold)
+    pred_norm = normalize_text(pred)
+    gold_positive = not gold_norm.startswith("否")
+    if pred_norm.startswith("否") or "不存在共同" in pred:
+        pred_positive = False
+    elif pred_norm.startswith("是") or extract_oms_nums(pred):
+        pred_positive = True
+    else:
+        pred_positive = any(token in pred for token in ["共同", "都经过"])
     yes_no_ok = gold_positive == pred_positive
 
     gold_oms = set(extract_oms_nums(gold))

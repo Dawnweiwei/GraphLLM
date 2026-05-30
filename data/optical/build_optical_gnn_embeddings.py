@@ -35,7 +35,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from build_optical_qa import load_source_samples, parse_sample  # noqa: E402
+from build_optical_qa import display_oms_id, load_source_samples, parse_sample  # noqa: E402
 
 
 SITE_ORDER = {site: idx + 1 for idx, site in enumerate("ABCDEFGHIJKLMNOPQRSTUVWXYZ")}
@@ -498,8 +498,184 @@ def focus_node_id(row: dict[str, Any]) -> str | None:
     return None
 
 
+def embedding_for_focus(
+    node_ids: list[str],
+    node_repr: torch.Tensor,
+    graph_repr: torch.Tensor,
+    node_id: str | None,
+) -> torch.Tensor:
+    if node_id and node_id in node_ids:
+        focus_repr = node_repr[node_ids.index(node_id)]
+        return F.normalize(0.7 * focus_repr + 0.3 * graph_repr, dim=0)
+    return graph_repr
+
+
 def format_embedding(tensor: torch.Tensor) -> str:
     return ",".join(f"{value:.6f}" for value in tensor.tolist())
+
+
+def compact_service_path(path_raw: str) -> str:
+    parts = [part for part in re.split(r"[-,\s]+", str(path_raw)) if part]
+    if not parts:
+        return str(path_raw)
+    return "-".join(part.lstrip("O").replace("OMS", "") for part in parts)
+
+
+def stage1_rows_for_sample(
+    sample_id: str,
+    parsed: dict[str, Any],
+    node_ids: list[str],
+    node_repr: torch.Tensor,
+    graph_repr: torch.Tensor,
+) -> list[list[str]]:
+    rows: list[list[str]] = []
+    links = parsed["topology"]
+    device_params = parsed["device"]
+    services = parsed["services"]
+
+    link_text = "，".join(
+        f"{link['src']}到{link['dst']}（{link['oms_display']}）"
+        for link in links
+    )
+    first_path = services[0]["path_oms_ids"] if services else []
+    common = set(first_path)
+    for service in services[1:]:
+        common &= set(service["path_oms_ids"])
+    first_common = next((oms_id for oms_id in first_path if oms_id in common), None)
+    common_text = (
+        f"是，所有给出的{len(services)}条业务都经过{display_oms_id(first_common)}。"
+        if first_common
+        else f"否，所有给出的{len(services)}条业务不存在共同经过的OMS链路。"
+    )
+
+    for link in links:
+        oms_id = link["oms_id"]
+        oms_display = link["oms_display"]
+        device_facts: list[str] = []
+        for (dev_oms_id, location), params in sorted(device_params.items()):
+            if dev_oms_id != oms_id:
+                continue
+            parts = []
+            if params.get("E.type"):
+                parts.append(f"EDFA类型{params['E.type']}")
+            if params.get("E.gain_dB"):
+                parts.append(f"增益{params['E.gain_dB']} dB")
+            if params.get("E.tilt"):
+                parts.append(f"tilt {params['E.tilt']}")
+            if params.get("V.pre_voa_dB"):
+                parts.append(f"VOA {params['V.pre_voa_dB']} dB")
+            if params.get("fiber.length_km"):
+                parts.append(f"光纤长度{params['fiber.length_km']} km")
+            if parts:
+                device_facts.append(f"{location}包含" + "，".join(parts))
+        service_count = sum(1 for service in services if oms_id in service["path_oms_ids"])
+        text = (
+            f"{oms_display}是从{link['src']}到{link['dst']}的有向OMS链路，"
+            f"上游节点是{link['src']}，下游节点是{link['dst']}。"
+            f"共有{service_count}条业务经过{oms_display}。"
+        )
+        if device_facts:
+            text += " 设备参数：" + "；".join(device_facts) + "。"
+        embedding = embedding_for_focus(node_ids, node_repr, graph_repr, f"oms:{oms_id}")
+        rows.append(
+            [
+                f"{sample_id}_stage1_{oms_id}",
+                format_embedding(embedding.cpu()),
+                text,
+                f"描述{oms_display}的拓扑和设备属性。",
+                text,
+                sample_id,
+                "stage1_alignment",
+                "oms_summary",
+                "train",
+            ]
+        )
+
+    for (oms_id, location), params in sorted(device_params.items()):
+        edfa_type = params.get("E.type")
+        gain = params.get("E.gain_dB")
+        if not edfa_type and not gain:
+            continue
+        oms_display = display_oms_id(oms_id)
+        facts = []
+        if edfa_type:
+            facts.append(f"EDFA类型为{edfa_type}")
+        if gain:
+            facts.append(f"增益为{gain} dB")
+        if params.get("E.tilt"):
+            facts.append(f"tilt为{params['E.tilt']}")
+        if params.get("V.pre_voa_dB"):
+            facts.append(f"pre VOA为{params['V.pre_voa_dB']} dB")
+        text = f"{oms_display}在{location}的设备参数：" + "，".join(facts) + "。"
+        embedding = embedding_for_focus(node_ids, node_repr, graph_repr, f"device:{oms_id}:{location}:E")
+        rows.append(
+            [
+                f"{sample_id}_stage1_{oms_id}_{location}_E",
+                format_embedding(embedding.cpu()),
+                text,
+                f"描述{oms_display}在{location}的设备参数。",
+                text,
+                sample_id,
+                "stage1_alignment",
+                "device_summary",
+                "train",
+            ]
+        )
+
+    for service in services:
+        service_id = service["service_id"]
+        path_text = compact_service_path(service["path_raw"])
+        text = (
+            f"业务{service_id}对应波长为{service['lambda_id']}，"
+            f"路径OMS为{path_text}，"
+            f"Q_margin为{service['q_margin']} dB，"
+            f"transponder为{service['transponder']}。"
+        )
+        embedding = embedding_for_focus(node_ids, node_repr, graph_repr, f"service:{service_id}")
+        rows.append(
+            [
+                f"{sample_id}_stage1_service_{service_id}",
+                format_embedding(embedding.cpu()),
+                text,
+                f"描述业务{service_id}的波长、路径和性能。",
+                text,
+                sample_id,
+                "stage1_alignment",
+                "service_summary",
+                "train",
+            ]
+        )
+
+    if links:
+        embedding = graph_repr
+        rows.append(
+            [
+                f"{sample_id}_stage1_network_adjacency",
+                format_embedding(embedding.cpu()),
+                f"已存在的有向链路包括：{link_text}。",
+                f"描述样本{sample_id}的全局有向链路。",
+                f"已存在的有向链路包括：{link_text}。",
+                sample_id,
+                "stage1_alignment",
+                "network_adjacency_summary",
+                "train",
+            ]
+        )
+        rows.append(
+            [
+                f"{sample_id}_stage1_network_common_oms",
+                format_embedding(embedding.cpu()),
+                common_text,
+                f"判断样本{sample_id}中所有业务是否经过同一条OMS链路。",
+                common_text,
+                sample_id,
+                "stage1_alignment",
+                "network_common_oms_summary",
+                "train",
+            ]
+        )
+
+    return rows
 
 
 def load_qa_rows(paths: list[Path]) -> list[dict[str, Any]]:
@@ -552,6 +728,7 @@ def main() -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     tsv_path = args.output_dir / "optical_translator_rows.tsv"
+    stage1_tsv_path = args.output_dir / "optical_stage1_translator_rows.tsv"
     split_tsv_paths = {
         "train": args.output_dir / "optical_train_translator_rows.tsv",
         "test": args.output_dir / "optical_test_translator_rows.tsv",
@@ -607,6 +784,8 @@ def main() -> None:
     embeddings: dict[str, torch.Tensor] = {}
     missing_focus = 0
     header = ["id", "embedding", "producer_text", "question", "answer", "sample_id", "task_type", "subtask", "split"]
+    stage1_row_count = 0
+    train_sample_ids = sample_ids_for_split(qa_rows, "train")
     split_files = {
         split: path.open("w", encoding="utf-8", newline="")
         for split, path in split_tsv_paths.items()
@@ -623,12 +802,8 @@ def main() -> None:
                 node_ids, node_repr = node_repr_by_sample[sample_id]
                 graph_repr = graph_repr_by_sample[sample_id]
                 node_id = focus_node_id(row)
-                if node_id and node_id in node_ids:
-                    focus_repr = node_repr[node_ids.index(node_id)]
-                    embedding = F.normalize(0.7 * focus_repr + 0.3 * graph_repr, dim=0)
-                else:
-                    missing_focus += int(node_id is not None)
-                    embedding = graph_repr
+                missing_focus += int(node_id is not None and node_id not in node_ids)
+                embedding = embedding_for_focus(node_ids, node_repr, graph_repr, node_id)
                 embeddings[row["id"]] = embedding.cpu()
                 output_row = [
                     row["id"],
@@ -645,6 +820,24 @@ def main() -> None:
                 split_writer = split_writers.get(row["_split"])
                 if split_writer is not None:
                     split_writer.writerow(output_row)
+
+        with stage1_tsv_path.open("w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f, delimiter="\t")
+            writer.writerow(header)
+            for sample_id in sorted(train_sample_ids):
+                if sample_id not in parsed_by_sample:
+                    continue
+                node_ids, node_repr = node_repr_by_sample[sample_id]
+                graph_repr = graph_repr_by_sample[sample_id]
+                for output_row in stage1_rows_for_sample(
+                    sample_id,
+                    parsed_by_sample[sample_id],
+                    node_ids,
+                    node_repr,
+                    graph_repr,
+                ):
+                    writer.writerow(output_row)
+                    stage1_row_count += 1
     finally:
         for file in split_files.values():
             file.close()
@@ -656,6 +849,8 @@ def main() -> None:
         "embedding_dim": 768,
         "missing_focus": missing_focus,
         "tsv": str(tsv_path),
+        "stage1_tsv": str(stage1_tsv_path),
+        "stage1_rows": stage1_row_count,
         "train_tsv": str(split_tsv_paths["train"]),
         "test_tsv": str(split_tsv_paths["test"]),
         "pt": str(pt_path),

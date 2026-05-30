@@ -28,9 +28,13 @@ class TranslatorCHATGLMOptical(TranslatorCHATGLMArxiv):
         "pretrain_optical": "train/pretrain_optical_stage2.yaml",
         "pretrain_optical_qa_1k": "train/pretrain_optical_stage2_qa_1k.yaml",
         "pretrain_optical_qa_20k": "train/pretrain_optical_stage2_qa_20k.yaml",
+        "pretrain_optical_qa_20k_focused": "train/pretrain_optical_stage2_qa_20k_focused.yaml",
+        "pretrain_optical_qa_20k_focused_v2": "train/pretrain_optical_stage2_qa_20k_focused_v2.yaml",
         "generate_optical": "train/generate_optical.yaml",
         "generate_optical_qa_32": "train/generate_optical_qa_32.yaml",
         "generate_optical_qa_1k": "train/generate_optical_qa_1k.yaml",
+        "generate_optical_qa_1k_focused": "train/generate_optical_qa_1k_focused.yaml",
+        "generate_optical_qa_1k_focused_v2": "train/generate_optical_qa_1k_focused_v2.yaml",
     }
 
     def _build_qa_prompts(self, producer_texts, questions):

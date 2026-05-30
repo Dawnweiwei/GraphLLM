@@ -14,12 +14,18 @@ from datasets.datasets.optical_text_pair_datasets import OpticalTextPairDataset
 class OpticalCaptionBuilder(BaseDatasetBuilder):
     DATASET_CONFIG_DICT = {
         "stage1": "train/pretrain_optical_stage1.yaml",
+        "stage1_focused": "train/pretrain_optical_stage1_focused.yaml",
+        "stage1_focused_v2": "train/pretrain_optical_stage1_focused_v2.yaml",
         "stage2": "train/pretrain_optical_stage2.yaml",
         "stage2_qa_1k": "train/pretrain_optical_stage2_qa_1k.yaml",
         "stage2_qa_20k": "train/pretrain_optical_stage2_qa_20k.yaml",
+        "stage2_qa_20k_focused": "train/pretrain_optical_stage2_qa_20k_focused.yaml",
+        "stage2_qa_20k_focused_v2": "train/pretrain_optical_stage2_qa_20k_focused_v2.yaml",
         "generate": "train/generate_optical.yaml",
         "generate_qa_32": "train/generate_optical_qa_32.yaml",
         "generate_qa_1k": "train/generate_optical_qa_1k.yaml",
+        "generate_qa_1k_focused": "train/generate_optical_qa_1k_focused.yaml",
+        "generate_qa_1k_focused_v2": "train/generate_optical_qa_1k_focused_v2.yaml",
     }
 
     def __init__(self, dataset_config, cfg):
